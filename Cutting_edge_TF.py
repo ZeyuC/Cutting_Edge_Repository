@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Sat Feb 29 16:05:19 2020
-
 @author: chenzeyu
 """
 
@@ -11,8 +10,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
-import random
-import tensorflow_probability as tfp
 
 from sklearn.model_selection import train_test_split
 
@@ -29,18 +26,23 @@ n_stocks = data_close.shape[1]
 # Data treatment ,fill the NA and calculate the daily reture
 for j in range(0,n_stocks):
         data_close.iloc[:,j]=data_close.iloc[:,j].fillna(data_close.iloc[:,j].mean())
-#rendements = np.log(data_close.values[1:,:]/data_close.values[:-1,:])
-#rendements = np.float32(rendements)
-X=(data_close)/np.std(data_close)
+
+#Data=(data_close)/np.std(data_close)
+
+        
+Data = np.log(data_close.values[1:,:]/data_close.values[:-1,:])
+X_data =  Data[:,0:3]*100
+#X_data =  Data[:,np.random.randint(0,237,5)]*100
+
 #Split the raw data to two part train and test
 
-X_data =  X.iloc[:,0:10] 
-#X_train, X_test = train_test_split(X_data, test_size = 0.35,shuffle=False)
-X_train, X_test = train_test_split(X_data, test_size = 0.35,random_state=42)
+
+X_train, X_test = train_test_split(X_data, test_size = 0.35,shuffle=False)
+#X_train, X_test = train_test_split(X_data, test_size = 0.35,random_state=42)
 #Constants declaration 
 Y_size = X_train.shape[0]     #the number of date we will used for one network training
 X_size = X_train.shape[1]     #X_size is the number of stock
-epochs = 6000             #the number of iteration
+epochs = 15000                #the number of iteration
 
 ##############################################
 ##############################################
@@ -49,11 +51,26 @@ epochs = 6000             #the number of iteration
 def sample_noise_uniform(n=Y_size, dim=X_size):        
     return np.random.uniform(-1,1,(n,dim))
 
-def sample_noise_Gaus(n=Y_size, dim=X_size):        
-    return np.random.normal(0,1,(n,dim))
+def sample_noise_Gaus(n=Y_size, dim=X_size):
+    var = np.var(X_train) 
+    mean = np.mean(X_train)
+    return np.random.normal(mean,var,(n,dim))
 
- 
-def generator(Z,nb_neurone=64,reuse=False):
+def sample_noise_multiGaus(n=Y_size):        
+    return np.random.multivariate_normal(np.mean(X_train,axis=0),np.cov(np.transpose(X_train)),n)
+
+
+## Plot les loss
+def plot_loss(d_loss_list,g_loss_list):
+    plt.subplot(2, 1, 1) 
+    plt.plot(d_loss_list, 'yo-') 
+    plt.ylabel('d_loss')
+
+    plt.subplot(2, 1, 2)  
+    plt.plot(g_loss_list,'r.-')  
+    plt.ylabel('g_loss')
+    
+def generator(Z,nb_neurone=[64,32],reuse=False):
     """ generator structure
     Args:
         Z: The noise that is uniform or Gaussain
@@ -61,13 +78,13 @@ def generator(Z,nb_neurone=64,reuse=False):
         reuse: False means create a new variable,True means reuse the existing one 
     """
     with tf.variable_scope("GAN/Generator",reuse=reuse):
-        h1 = tf.layers.dense(Z,nb_neurone,activation=tf.nn.leaky_relu)
-        #h2 = tf.layers.dense(h1,nb_neurone,activation=tf.nn.leaky_relu)
-        output = tf.layers.dense(h1,X_size)
+        h1 = tf.layers.dense(Z,64,activation=tf.nn.leaky_relu)
+        h2 = tf.layers.dense(h1,32)
+        output = tf.layers.dense(h2,X_size)
     return output
 
 
-def discriminator(X,nb_neurone=[64,16],reuse=False):
+def discriminator(X,nb_neurone=[64,32],reuse=False):
     """ generator structure
     Args:
         X: The real data or generated data 
@@ -75,10 +92,9 @@ def discriminator(X,nb_neurone=[64,16],reuse=False):
         reuse: False means create a new variable,True means reuse the existing one 
     """
     with tf.variable_scope("GAN/Discriminator",reuse=reuse):
-        h1 = tf.layers.dense(X,nb_neurone[0],activation=tf.nn.leaky_relu)
-        h2 = tf.layers.dense(h1,nb_neurone[1],activation=tf.nn.leaky_relu)
-        h3 = tf.layers.dense(h2,2)
-        output = tf.layers.dense(h3,1)
+        h1 = tf.layers.dense(X,64,activation=tf.nn.leaky_relu)
+        h2 = tf.layers.dense(h1,2)
+        output = tf.layers.dense(h2,1)
 
     return output
 
@@ -94,6 +110,10 @@ gen_logits = discriminator(gen_sample,reuse=True)
 #corr = tf.transpose(tfp.stats.correlation(gen_sample))
 #corr_loss = tf.reduce_sum(corr)- tf.reduce_sum(tf.diag_part(corr))
 
+
+"""
+Definition of loss function and the Optimizer with learning rate  0.001, decay 0.95
+"""
 #dis_loss = min E[-log(D(X))] + E[log(1-D(G(Z)))] := real_loss + gen_loss
 #sigmoid_cross_entropy_with_logits(x,z) = z * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x))
 r_loss=tf.nn.sigmoid_cross_entropy_with_logits(logits=real_logits,labels=tf.ones_like(real_logits))
@@ -102,44 +122,49 @@ disc_loss = tf.reduce_mean(r_loss + g_loss)
 
 
 #gen_loss = min E[log(1-D(G(Z)))] =  max  E[log D(G(Z)] = min - E[log(D(G(Z)))]
-
 gen_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=gen_logits,labels=tf.ones_like(gen_logits)))
 
 
-#Define the Optimizer with learning rate  0.001
+
 gen_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope="GAN/Generator")
 disc_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,scope="GAN/Discriminator")
-gen_step = tf.train.RMSPropOptimizer(learning_rate=0.001,decay=0.95, momentum=0.0, epsilon=1e-10).minimize(gen_loss,var_list = gen_vars) 
-disc_step = tf.train.RMSPropOptimizer(learning_rate=0.001,decay=0.95, momentum=0.0, epsilon=1e-10).minimize(disc_loss,var_list = disc_vars) 
-#gen_step = tf.train.RMSPropOptimizer(learning_rate=0.001).minimize(gen_loss,var_list = gen_vars) 
-#disc_step = tf.train.RMSPropOptimizer(learning_rate=0.001).minimize(disc_loss,var_list = disc_vars) 
+gen_step = tf.train.RMSPropOptimizer(learning_rate=0.005,decay=0.9, momentum=0.0, epsilon=1e-8).minimize(gen_loss,var_list = gen_vars) 
+disc_step = tf.train.RMSPropOptimizer(learning_rate=0.005,decay=0.9, momentum=0.0, epsilon=1e-8).minimize(disc_loss,var_list = disc_vars) 
 
 
 
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
-nd_steps=4 #entrainer plus de dis que gen
-ng_steps=8
-#Training process
+nd_steps=1#entrainer plus de dis que gen
+ng_steps=1
+d_loss_list=[]
+g_loss_list = []
+
+
+"""
+Training process
+"""
 
 X_batch = X_train
 with tf.device('/device:GPU:0'):
     for i in range(epochs):
-        Z_batch = sample_noise_Gaus(Y_size, X_size)
+        #Z_batch = sample_noise_uniform(Y_size,X_size)
+        Z_batch = sample_noise_Gaus(Y_size,X_size)
         #ind_X = random.sample(range(Y_size),Y_size)
         for _ in range(nd_steps):
             _, dloss = sess.run([disc_step, disc_loss], feed_dict={X: X_batch, Z: Z_batch})
-    #rrep_dstep, grep_dstep = sess.run([r_rep, g_rep], feed_dict={X: X_batch, Z: Z_batch})
-
+           
         for _ in range(ng_steps):
             _, gloss = sess.run([gen_step, gen_loss], feed_dict={Z: Z_batch})
-
-        if i%100==0:
+            
+        if i%100==0:    
             print ("Iterations:" ,i,"Discriminator loss: ",dloss,"Generator loss:" , gloss)
-        
+            d_loss_list.append(dloss)
+            g_loss_list.append(gloss)
 
         
 #Generate data with our generator by feeding Z 
+Z_batch = sample_noise_Gaus(Y_size,X_size)
 pred=sess.run(gen_sample,feed_dict={Z: Z_batch})
 
 #Check if generator cheated discriminator by checking if Prob_real and
@@ -153,7 +178,7 @@ y_pred=sess.run(real_logits,feed_dict={X: pred})
 Prob_pred=sess.run(tf.sigmoid(y_pred))
 
 
-#Check the cov matrix (problem need to solve)
+#Check if the Cov and mean are good
 np.set_printoptions(suppress=True)
 
 Mean_pred = np.mean(np.transpose(pred),axis=1)
@@ -165,3 +190,44 @@ Cov_X = np.around(np.cov(np.transpose(X_batch)), decimals=3)
 
 Corr_pred = np.around(np.corrcoef(np.transpose(pred)), decimals=3)
 Corr_X = np.around(np.corrcoef(np.transpose(X_batch)), decimals=3)
+
+#plot the loss
+plt.figure(num=0, figsize=(7, 5))
+
+plot_loss(d_loss_list,g_loss_list)
+
+
+plt.figure(num=1, figsize=(7, 5))
+plt.ylim((-15, 15))
+plt.plot(X_batch[:,0])
+plt.plot(pred[:,0])
+plt.title('return series of stock 1')
+
+plt.figure(num=2, figsize=(7, 5))
+plt.plot(X_batch[:,1])
+plt.plot(pred[:,1])
+plt.title('return series of stock 2')
+plt.ylim((-15, 15))
+plt.show()
+
+plt.figure(num=3, figsize=(7, 5))
+plt.plot(X_batch[:,2])
+plt.plot(pred[:,2])
+plt.title('return series of stock 3')
+plt.ylim((-15, 15))
+plt.show()
+
+plt.figure(num=4, figsize=(7, 5))
+plt.plot(X_batch[:,3])
+plt.plot(pred[:,3])
+plt.title('return series of stock 4')
+plt.ylim((-15, 15))
+plt.show()
+
+plt.figure(num=5, figsize=(7, 5))
+plt.plot(X_batch[:,4])
+plt.plot(pred[:,4])
+plt.title('return series of stock 5')
+plt.ylim((-15, 15))
+plt.show()
+
